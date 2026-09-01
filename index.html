@@ -255,7 +255,7 @@
           <button class="tool-btn active" data-tool="pen" title="Caneta">✏️</button>
           <button class="tool-btn" data-tool="marker" title="Marcador">🖊️</button>
           <button class="tool-btn" data-tool="eraser" title="Borracha">🧽</button>
-          <button class="tool-btn" data-tool="smartfill" title="Pincel mágico (preenche a área sem vazar)">🪄</button>
+          <button class="tool-btn" data-tool="smartfill" title="Pincel mágico (pinta rápido sem vazar pra fora)">🪄</button>
         </div>
         <div class="tool-group" id="size-tools">
           <button class="size-btn" data-size="8">S</button>
@@ -572,60 +572,56 @@
     return mask;
   }
 
-  function paintMaskedDab(cx, cy, radius, colorRGB, mask){
-    cx = Math.round(cx); cy = Math.round(cy);
-    var r = Math.max(1, Math.ceil(radius));
-    var x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r);
-    var x1 = Math.min(CANVAS_W - 1, cx + r), y1 = Math.min(CANVAS_H - 1, cy + r);
-    var w = x1 - x0 + 1, h = y1 - y0 + 1;
-    if (w <= 0 || h <= 0) return;
-
-    var imgData = ctx.getImageData(x0, y0, w, h);
-    var data = imgData.data;
-    var rSq = r * r;
-    var changed = false;
-
-    for (var y = 0; y < h; y++){
-      for (var x = 0; x < w; x++){
-        var gx = x0 + x, gy = y0 + y;
-        var dx = gx - cx, dy = gy - cy;
-        if (dx*dx + dy*dy > rSq) continue;
-        if (mask[gy * CANVAS_W + gx] !== 1) continue;
-        var i = (y * w + x) * 4;
-        data[i] = colorRGB.r; data[i+1] = colorRGB.g; data[i+2] = colorRGB.b; data[i+3] = 255;
-        changed = true;
-      }
-    }
-
-    if (changed) ctx.putImageData(imgData, x0, y0);
+  function isInsideMask(mask, x, y){
+    var xi = Math.round(x), yi = Math.round(y);
+    if (xi < 0 || xi >= CANVAS_W || yi < 0 || yi >= CANVAS_H) return false;
+    return mask[yi * CANVAS_W + xi] === 1;
   }
 
-  function paintMaskedLine(p1, p2, radius, colorRGB, mask){
-    var dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    var steps = Math.max(1, Math.ceil(dist / Math.max(2, radius * 0.5)));
-    for (var i=0;i<=steps;i++){
+  function interpolateSteps(p1, p2, maxStep){
+    var dx = p2.x - p1.x, dy = p2.y - p1.y;
+    var dist = Math.sqrt(dx*dx + dy*dy);
+    var steps = Math.max(1, Math.ceil(dist / maxStep));
+    var pts = [];
+    for (var i=1;i<=steps;i++){
       var t = i / steps;
-      paintMaskedDab(p1.x + (p2.x-p1.x)*t, p1.y + (p2.y-p1.y)*t, radius, colorRGB, mask);
+      pts.push({ x: p1.x + dx*t, y: p1.y + dy*t });
     }
-  }
-
-  function applyMaskColor(mask, colorRGB){
-    var imgData = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
-    var data = imgData.data;
-    for (var idx = 0; idx < mask.length; idx++){
-      if (mask[idx] === 1){
-        var i = idx * 4;
-        data[i] = colorRGB.r; data[i+1] = colorRGB.g; data[i+2] = colorRGB.b; data[i+3] = 255;
-      }
-    }
-    ctx.putImageData(imgData, 0, 0);
+    return pts;
   }
 
   var smartFillMask = null;
-  var smartFillColorRGB = null;
-  var smartFillSeed = null;
-  var smartFillLastPoint = null;
+  var smartFillLastRawPoint = null;
+  var smartFillInsideActive = false;
+  var smartFillLastInsidePoint = null;
   var drawingSmartFill = false;
+
+  function handleSmartFillSample(pos){
+    if (!smartFillMask) return;
+    if (isInsideMask(smartFillMask, pos.x, pos.y)){
+      if (!smartFillInsideActive){
+        smartFillInsideActive = true;
+        var sid = firebaseReady ? db.ref('strokes').push().key : ('l' + Date.now() + Math.random().toString(36).slice(2,6));
+        currentStroke = { id: sid, color: currentColor, size: currentSize };
+        myStrokeIds.push(sid);
+        pendingPoints = [[pos.x, pos.y]];
+        drawSegment(pos, pos, currentStroke.color, currentStroke.size);
+        if (firebaseReady){
+          db.ref('strokes/' + sid).set({ color: currentStroke.color, size: currentStroke.size, ts: Date.now(), by: myName });
+        }
+        smartFillLastInsidePoint = pos;
+      } else {
+        drawSegment(smartFillLastInsidePoint, pos, currentStroke.color, currentStroke.size);
+        pendingPoints.push([pos.x, pos.y]);
+        scheduleFlush();
+        smartFillLastInsidePoint = pos;
+      }
+    } else if (smartFillInsideActive){
+      flushPending();
+      smartFillInsideActive = false;
+      currentStroke = null;
+    }
+  }
 
   var drawing = false;
   var currentStroke = null;
@@ -670,11 +666,12 @@
     if (currentTool === 'smartfill'){
       smartFillMask = computeFillMask(pos.x, pos.y, FILL_TOLERANCE);
       if (!smartFillMask) return;
-      smartFillColorRGB = hexToRgb(currentColor);
-      smartFillSeed = pos;
-      smartFillLastPoint = pos;
       drawingSmartFill = true;
-      paintMaskedDab(pos.x, pos.y, currentSize, smartFillColorRGB, smartFillMask);
+      smartFillLastRawPoint = pos;
+      smartFillInsideActive = false;
+      smartFillLastInsidePoint = null;
+      currentStroke = null;
+      handleSmartFillSample(pos);
       try { canvasViewport.setPointerCapture(e.pointerId); } catch(err){}
       return;
     }
@@ -705,10 +702,9 @@
     sendCursor(pos);
 
     if (drawingSmartFill){
-      if (smartFillMask){
-        paintMaskedLine(smartFillLastPoint, pos, currentSize, smartFillColorRGB, smartFillMask);
-        smartFillLastPoint = pos;
-      }
+      var samples = interpolateSteps(smartFillLastRawPoint, pos, 4);
+      samples.forEach(handleSmartFillSample);
+      smartFillLastRawPoint = pos;
       return;
     }
 
@@ -725,19 +721,13 @@
       canvasViewport.classList.remove('panning');
     }
     if (drawingSmartFill){
-      if (smartFillMask){
-        applyMaskColor(smartFillMask, smartFillColorRGB);
-        var fid = firebaseReady ? db.ref('strokes').push().key : ('f' + Date.now() + Math.random().toString(36).slice(2,6));
-        myStrokeIds.push(fid);
-        if (firebaseReady){
-          db.ref('strokes/' + fid).set({
-            type:'fill', x: Math.round(smartFillSeed.x), y: Math.round(smartFillSeed.y),
-            color: currentColor, ts: Date.now(), by: myName
-          });
-        }
+      if (smartFillInsideActive){
+        flushPending();
       }
       drawingSmartFill = false;
+      smartFillInsideActive = false;
       smartFillMask = null;
+      currentStroke = null;
       return;
     }
     if (drawing){
