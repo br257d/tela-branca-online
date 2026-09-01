@@ -524,7 +524,7 @@
     if (!myName) return;
     var fillColor = currentColor;
     floodFill(ctx, pos.x, pos.y, fillColor, FILL_TOLERANCE);
-    var fid = firebaseReady ? db.ref('strokes').push().key : ('f' + Date.now() + Math.random().toString(36).slice(2,6));
+    var fid = 'f' + Date.now() + Math.random().toString(36).slice(2,6);
     myStrokeIds.push(fid);
     if (firebaseReady){
       db.ref('strokes/' + fid).set({
@@ -578,7 +578,7 @@
       return;
     }
     drawing = true;
-    var sid = firebaseReady ? db.ref('strokes').push().key : ('l' + Date.now() + Math.random().toString(36).slice(2,6));
+    var sid = 'l' + Date.now() + Math.random().toString(36).slice(2,6);
     currentStroke = { id: sid, color: currentTool === 'eraser' ? '#ffffff' : currentColor, size: currentSize };
     myStrokeIds.push(sid);
     lastPoint = pos;
