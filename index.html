@@ -255,6 +255,7 @@
           <button class="tool-btn active" data-tool="pen" title="Caneta">✏️</button>
           <button class="tool-btn" data-tool="marker" title="Marcador">🖊️</button>
           <button class="tool-btn" data-tool="eraser" title="Borracha">🧽</button>
+          <button class="tool-btn" data-tool="bucket" title="Balde de tinta">🪣</button>
         </div>
         <div class="tool-group" id="size-tools">
           <button class="size-btn" data-size="8">S</button>
@@ -456,6 +457,83 @@
     ctx.stroke();
   }
 
+  var FILL_TOLERANCE = 28;
+
+  function hexToRgb(hex){
+    hex = String(hex).replace('#', '');
+    if (hex.length === 3){
+      hex = hex.split('').map(function(c){ return c + c; }).join('');
+    }
+    var num = parseInt(hex, 16) || 0;
+    return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+  }
+
+  function floodFill(targetCtx, startX, startY, fillColor, tolerance){
+    startX = Math.round(startX);
+    startY = Math.round(startY);
+    if (startX < 0 || startX >= CANVAS_W || startY < 0 || startY >= CANVAS_H) return;
+
+    var imgData = targetCtx.getImageData(0, 0, CANVAS_W, CANVAS_H);
+    var data = imgData.data;
+    var startIdx = (startY * CANVAS_W + startX) * 4;
+    var startR = data[startIdx], startG = data[startIdx+1], startB = data[startIdx+2], startA = data[startIdx+3];
+    var fillRGB = hexToRgb(fillColor);
+
+    if (Math.abs(startR - fillRGB.r) <= tolerance && Math.abs(startG - fillRGB.g) <= tolerance &&
+        Math.abs(startB - fillRGB.b) <= tolerance && startA === 255){
+      return;
+    }
+
+    function matches(idx){
+      return Math.abs(data[idx] - startR) <= tolerance &&
+             Math.abs(data[idx+1] - startG) <= tolerance &&
+             Math.abs(data[idx+2] - startB) <= tolerance &&
+             Math.abs(data[idx+3] - startA) <= tolerance;
+    }
+
+    var stack = [[startX, startY]];
+    while (stack.length){
+      var pt = stack.pop();
+      var x = pt[0], y = pt[1];
+      var idx = (y * CANVAS_W + x) * 4;
+      if (!matches(idx)) continue;
+
+      var xLeft = x;
+      while (xLeft > 0 && matches((y * CANVAS_W + (xLeft - 1)) * 4)) xLeft--;
+      var xRight = x;
+      while (xRight < CANVAS_W - 1 && matches((y * CANVAS_W + (xRight + 1)) * 4)) xRight++;
+
+      for (var xi = xLeft; xi <= xRight; xi++){
+        var i = (y * CANVAS_W + xi) * 4;
+        data[i] = fillRGB.r; data[i+1] = fillRGB.g; data[i+2] = fillRGB.b; data[i+3] = 255;
+        if (y > 0){
+          var upIdx = ((y - 1) * CANVAS_W + xi) * 4;
+          if (matches(upIdx)) stack.push([xi, y - 1]);
+        }
+        if (y < CANVAS_H - 1){
+          var downIdx = ((y + 1) * CANVAS_W + xi) * 4;
+          if (matches(downIdx)) stack.push([xi, y + 1]);
+        }
+      }
+    }
+
+    targetCtx.putImageData(imgData, 0, 0);
+  }
+
+  function performFill(pos){
+    if (!myName) return;
+    var fillColor = currentColor;
+    floodFill(ctx, pos.x, pos.y, fillColor, FILL_TOLERANCE);
+    var fid = 'f' + Date.now() + Math.random().toString(36).slice(2,6);
+    myStrokeIds.push(fid);
+    if (firebaseReady){
+      db.ref('strokes/' + fid).set({
+        type:'fill', x: Math.round(pos.x), y: Math.round(pos.y),
+        color: fillColor, ts: Date.now(), by: myName
+      });
+    }
+  }
+
   var drawing = false;
   var currentStroke = null;
   var lastPoint = null;
@@ -495,6 +573,10 @@
     if (!myName) return;
     var pos = getCanvasPos(e);
     if (!pos) return;
+    if (currentTool === 'bucket'){
+      performFill(pos);
+      return;
+    }
     drawing = true;
     var sid = 'l' + Date.now() + Math.random().toString(36).slice(2,6);
     currentStroke = { id: sid, color: currentTool === 'eraser' ? '#ffffff' : currentColor, size: currentSize };
@@ -567,6 +649,10 @@
     db.ref('strokes').once('value').then(function(snap){
       snap.forEach(function(strokeSnap){
         var meta = strokeSnap.val();
+        if (meta && meta.type === 'fill'){
+          floodFill(ctx, meta.x, meta.y, meta.color, FILL_TOLERANCE);
+          return;
+        }
         var prevPoint = null;
         strokeSnap.child('pts').forEach(function(batchSnap){
           var batch = batchSnap.val();
@@ -584,7 +670,12 @@
   function attachStrokesListener(){
     if (!firebaseReady) return;
     db.ref('strokes').on('child_added', function(snap){
-      attachStrokePointsListener(snap.key, snap.val());
+      var meta = snap.val();
+      if (meta && meta.type === 'fill'){
+        floodFill(ctx, meta.x, meta.y, meta.color, FILL_TOLERANCE);
+        return;
+      }
+      attachStrokePointsListener(snap.key, meta);
     });
     db.ref('strokes').on('child_removed', function(){
       fullRedraw();
