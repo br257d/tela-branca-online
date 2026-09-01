@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Tela Compartilhada</title>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+<style>
+  :root{
+    --bg:#f6f3ff;
+    --panel:#ffffff;
+    --line:#e7e1f5;
+    --ink:#241f3d;
+    --muted:#7d76a3;
+    --accent:#6c4cff;
+    --accent-ink:#ffffff;
+    --warm:#ff6f59;
+    --radius:16px;
+    --shadow:0 10px 30px rgba(40,20,90,.10);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    overflow:hidden;
+  }
+  button{ font-family:inherit; }
+  #app{ display:flex; flex-direction:column; height:100vh; }
+
+  #topbar{
+    display:flex; align-items:center; gap:14px;
+    padding:10px 18px; background:var(--panel);
+    border-bottom:1px solid var(--line); box-shadow:var(--shadow);
+    z-index:30; flex:0 0 auto;
+  }
+  .brand{ font-weight:700; font-size:17px; letter-spacing:.2px; }
+  .brand span{ color:var(--accent); }
+  #online-count{ font-size:13px; color:var(--muted); margin-left:auto; white-space:nowrap; }
+  #btn-nickname{
+    background:var(--bg); border:1px solid var(--line); border-radius:999px;
+    padding:6px 14px; font-size:13px; color:var(--ink); cursor:pointer;
+  }
+  .panel-toggle{
+    display:none; background:none; border:1px solid var(--line); border-radius:10px;
+    width:36px; height:36px; font-size:16px; cursor:pointer; color:var(--ink);
+  }
+
+  #layout{ flex:1; display:flex; min-height:0; }
+
+  .side-panel{
+    width:270px; flex:0 0 auto; background:var(--panel);
+    display:flex; flex-direction:column; min-height:0;
+    padding:14px; gap:10px;
+  }
+  #chat-panel{ border-right:1px solid var(--line); }
+  #shapes-panel{ border-left:1px solid var(--line); overflow-y:auto; }
+  .side-panel h3{ margin:4px 0 2px; font-size:13px; text-transform:none; color:var(--muted); font-weight:600; }
+
+  #chat-messages{ flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:2px; }
+  .chat-msg{ font-size:14px; line-height:1.4; }
+  .chat-msg.system{ color:var(--muted); font-style:italic; }
+  .chat-name{ font-weight:700; color:var(--accent); margin-right:6px; }
+  .chat-text{ overflow-wrap:anywhere; }
+  #chat-form{ display:flex; gap:6px; flex:0 0 auto; }
+  #chat-input{
+    flex:1; border:1px solid var(--line); border-radius:10px; padding:9px 10px;
+    font-size:14px; font-family:inherit; color:var(--ink);
+  }
+  #chat-input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+  #chat-form button{
+    background:var(--accent); color:#fff; border:none; border-radius:10px;
+    width:38px; cursor:pointer; font-size:15px;
+  }
+
+  #shapes-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .shape-btn{
+    background:var(--bg); border:1px solid var(--line); border-radius:12px;
+    padding:10px; cursor:pointer; color:var(--ink);
+  }
+  .shape-btn svg{ width:100%; height:28px; display:block; }
+  .shape-btn:hover{ border-color:var(--accent); }
+
+  .media-add{ display:flex; gap:6px; }
+  #media-url{
+    flex:1; min-width:0; border:1px solid var(--line); border-radius:10px;
+    padding:9px 10px; font-size:13px; font-family:inherit;
+  }
+  #btn-add-media{
+    background:var(--warm); color:#fff; border:none; border-radius:10px;
+    padding:0 12px; cursor:pointer; font-size:13px; font-weight:600;
+  }
+  #media-tray{ display:flex; flex-direction:column; gap:8px; }
+  .media-card{
+    display:flex; align-items:center; gap:8px; border:1px solid var(--line);
+    border-radius:10px; padding:6px; cursor:grab; background:var(--bg);
+  }
+  .media-card img, .media-card video{ width:38px; height:38px; object-fit:cover; border-radius:6px; background:#000; }
+  .media-card span{ font-size:12px; color:var(--muted); }
+
+  #canvas-area{ flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; padding:16px; gap:12px; }
+  .canvas-scaler{ flex:1; min-height:0; min-width:0; display:flex; align-items:center; justify-content:center; }
+  #canvas-wrapper{
+    position:relative; background:#fff;
+    border-radius:var(--radius); box-shadow:var(--shadow);
+    overflow:hidden; touch-action:none;
+  }
+  #draw-canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+  #objects-layer{ position:absolute; inset:0; pointer-events:none; }
+  #cursors-layer{ position:absolute; inset:0; pointer-events:none; z-index:5; }
+
+  .object-item{
+    position:absolute; pointer-events:auto; cursor:grab; touch-action:none;
+    aspect-ratio:1;
+  }
+  .object-item:active{ cursor:grabbing; }
+  .object-item svg{ width:100%; height:100%; display:block; overflow:visible; }
+  .object-item img, .object-item video{ width:100%; height:100%; object-fit:contain; display:block; border-radius:8px; }
+  .obj-del{
+    position:absolute; top:-8px; right:-8px; width:20px; height:20px;
+    border-radius:50%; background:var(--ink); color:#fff; border:2px solid #fff;
+    font-size:12px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center;
+  }
+  .object-item:hover .obj-del{ display:flex; }
+
+  .cursor-dot{ position:absolute; pointer-events:none; transform:translate(-2px,-2px); transition:left .05s linear, top .05s linear; }
+  .cursor-tip{
+    display:block; width:12px; height:12px; border-radius:50% 50% 50% 0;
+    transform:rotate(-45deg); box-shadow:0 1px 3px rgba(0,0,0,.35);
+  }
+  .cursor-label{
+    display:inline-block; margin-top:2px; padding:2px 7px; border-radius:999px;
+    font-size:11px; color:#fff; white-space:nowrap; box-shadow:0 1px 3px rgba(0,0,0,.25);
+  }
+
+  #toolbar{
+    flex:0 0 auto; background:var(--panel); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:10px 14px; display:flex; align-items:center;
+    gap:16px; flex-wrap:wrap;
+  }
+  .tool-group{ display:flex; gap:6px; align-items:center; }
+  .swatch{
+    width:24px; height:24px; border-radius:50%; border:2px solid #fff;
+    box-shadow:0 0 0 1px var(--line); cursor:pointer; padding:0;
+  }
+  .swatch-white{ box-shadow:0 0 0 1px #c9c2e0 inset, 0 0 0 1px var(--line); }
+  #color-picker{ width:30px; height:30px; border:none; border-radius:8px; padding:0; cursor:pointer; background:none; }
+  .tool-btn, .size-btn{
+    background:var(--bg); border:1px solid var(--line); border-radius:9px;
+    padding:7px 10px; cursor:pointer; font-size:15px; color:var(--ink);
+  }
+  .size-btn{ font-size:12px; font-weight:700; width:32px; }
+  .tool-btn.active, .size-btn.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  #btn-undo{
+    margin-left:auto; background:none; border:1px solid var(--line); border-radius:9px;
+    padding:8px 12px; cursor:pointer; font-size:13px; color:var(--ink);
+  }
+
+  #nickname-modal{
+    position:fixed; inset:0; background:rgba(36,31,61,.55); display:none;
+    align-items:center; justify-content:center; z-index:100; padding:20px;
+  }
+  #nickname-modal.show{ display:flex; }
+  .modal-card{
+    background:#fff; border-radius:18px; padding:26px; width:100%; max-width:340px;
+    box-shadow:0 20px 60px rgba(0,0,0,.3); text-align:center;
+  }
+  .modal-card h2{ margin:0 0 14px; font-size:19px; }
+  .modal-card input{
+    width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+    font-size:15px; font-family:inherit; margin-bottom:12px; text-align:center;
+  }
+  .modal-card input:focus{ outline:2px solid var(--accent); }
+  .modal-card button{
+    width:100%; background:var(--accent); color:#fff; border:none; border-radius:10px;
+    padding:12px; font-size:14px; font-weight:700; cursor:pointer;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ transition:none !important; animation:none !important; }
+  }
+
+  @media (max-width:900px){
+    .panel-toggle{ display:flex; align-items:center; justify-content:center; }
+    .side-panel{
+      position:fixed; top:56px; bottom:0; width:82vw; max-width:320px;
+      z-index:40; transform:translateX(-110%); transition:transform .2s ease;
+      box-shadow:0 10px 30px rgba(0,0,0,.25);
+    }
+    #shapes-panel{ right:0; transform:translateX(110%); }
+    body.show-chat #chat-panel{ transform:translateX(0); }
+    body.show-tools #shapes-panel{ transform:translateX(0); }
+    #canvas-area{ padding:10px; }
+    #toolbar{ gap:10px; padding:8px 10px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">🎨 <span>Tela</span> Compartilhada</div>
+    <button class="panel-toggle" id="toggle-chat" aria-label="Chat">💬</button>
+    <button class="panel-toggle" id="toggle-tools" aria-label="Formas e mídia">🧰</button>
+    <div id="online-count">conectando...</div>
+    <button id="btn-nickname">Você: <span id="my-name">?</span></button>
+  </header>
+
+  <div id="layout">
+    <aside id="chat-panel" class="side-panel">
+      <h3>Chat</h3>
+      <div id="chat-messages"></div>
+      <form id="chat-form">
+        <input id="chat-input" maxlength="300" placeholder="Escreva algo..." autocomplete="off">
+        <button type="submit">➤</button>
+      </form>
+    </aside>
+
+    <main id="canvas-area">
+      <div class="canvas-scaler">
+        <div id="canvas-wrapper">
+          <canvas id="draw-canvas" width="1200" height="750"></canvas>
+          <div id="objects-layer"></div>
+          <div id="cursors-layer"></div>
+        </div>
+      </div>
+      <div id="toolbar">
+        <div class="tool-group" id="color-swatches"></div>
+        <input type="color" id="color-picker" value="#241f3d" title="Cor personalizada">
+        <div class="tool-group" id="brush-tools">
+          <button class="tool-btn active" data-tool="pen" title="Caneta">✏️</button>
+          <button class="tool-btn" data-tool="marker" title="Marcador">🖊️</button>
+          <button class="tool-btn" data-tool="eraser" title="Borracha">🧽</button>
+        </div>
+        <div class="tool-group" id="size-tools">
+          <button class="size-btn" data-size="4">S</button>
+          <button class="size-btn active" data-size="10">M</button>
+          <button class="size-btn" data-size="24">L</button>
+        </div>
+        <button id="btn-undo">↩ Desfazer</button>
+      </div>
+    </main>
+
+    <aside id="shapes-panel" class="side-panel">
+      <h3>Formas</h3>
+      <div id="shapes-grid"></div>
+      <h3>Imagem / vídeo por link</h3>
+      <div class="media-add">
+        <input id="media-url" placeholder="Cole a URL aqui" autocomplete="off">
+        <button id="btn-add-media">Add</button>
+      </div>
+      <div id="media-tray"></div>
+    </aside>
+  </div>
+</div>
+
+<div id="nickname-modal">
+  <div class="modal-card">
+    <h2>Como podemos te chamar?</h2>
+    <input id="nickname-input" maxlength="16" placeholder="Seu nome" autocomplete="off">
+    <button id="btn-confirm-name">Entrar na tela</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var FIREBASE_CONFIG = {
+    apiKey: "AIzaSyBg-xqXkl-AMCQAWUPfH4IeMSHVcu9HnVU",
+    authDomain: "tela-branca.firebaseapp.com",
+    databaseURL: "https://tela-branca-default-rtdb.firebaseio.com",
+    projectId: "tela-branca",
+    storageBucket: "tela-branca.firebasestorage.app",
+    messagingSenderId: "508365843522",
+    appId: "1:508365843522:web:540bad05b574d5d9cc11db",
+    measurementId: "G-MST90P13M9"
+  };
+
+  var db = null;
+  var firebaseReady = false;
+  try {
+    if (FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey !== "COLE_AQUI" && window.firebase) {
+      firebase.initializeApp(FIREBASE_CONFIG);
+      db = firebase.database();
+      firebaseReady = true;
+    }
+  } catch (e) { firebaseReady = false; }
+
+  function $(id){ return document.getElementById(id); }
+
+  var CANVAS_W = 1200, CANVAS_H = 750;
+  var myClientId = 'u' + Date.now() + Math.random().toString(36).slice(2,8);
+  var myName = '';
+  var CURSOR_COLORS = ['#6c4cff','#ff6f59','#12b5c9','#ff3b81','#39c95c','#f0a500'];
+  var myColor = CURSOR_COLORS[Math.floor(Math.random()*CURSOR_COLORS.length)];
+  var currentColor = '#241f3d';
+  var currentTool = 'pen';
+  var currentSize = 10;
+  var myStrokeIds = [];
+
+  var SHAPE_SVGS = {
+    circle: '<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="42" fill="currentColor"/></svg>',
+    square: '<svg viewBox="0 0 100 100"><rect x="10" y="10" width="80" height="80" rx="10" fill="currentColor"/></svg>',
+    triangle: '<svg viewBox="0 0 100 100"><polygon points="50,8 92,88 8,88" fill="currentColor"/></svg>',
+    star: '<svg viewBox="0 0 100 100"><polygon points="50,5 61,37 96,37 68,58 79,91 50,71 21,91 32,58 4,37 39,37" fill="currentColor"/></svg>',
+    heart: '<svg viewBox="0 0 100 100"><path d="M50 88 C10 62 4 36 24 22 C38 12 50 22 50 34 C50 22 62 12 76 22 C96 36 90 62 50 88 Z" fill="currentColor"/></svg>',
+    arrow: '<svg viewBox="0 0 100 100"><path d="M10 42 H62 V24 L92 50 L62 76 V58 H10 Z" fill="currentColor"/></svg>'
+  };
+  var SHAPE_KEYS = ['circle','square','triangle','star','heart','arrow'];
+
+  var COLORS = ['#241f3d','#ff3b3b','#ff9f1c','#ffd23f','#39c95c','#12b5c9','#3a6df0','#a24cff','#ff5da2','#ffffff'];
+
+  var canvas = $('draw-canvas');
+  var ctx = canvas.getContext('2d');
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  var canvasWrapper = $('canvas-wrapper');
+  var canvasScaler = document.querySelector('.canvas-scaler');
+  var objectsLayer = $('objects-layer');
+  var cursorsLayer = $('cursors-layer');
+  var chatMessagesEl = $('chat-messages');
+
+  function resizeCanvasWrapper(){
+    var availW = canvasScaler.clientWidth;
+    var availH = canvasScaler.clientHeight;
+    if (!availW || !availH) return;
+    var ratio = CANVAS_W / CANVAS_H;
+    var w = availW;
+    var h = w / ratio;
+    if (h > availH){
+      h = availH;
+      w = h * ratio;
+    }
+    canvasWrapper.style.width = w + 'px';
+    canvasWrapper.style.height = h + 'px';
+  }
+  resizeCanvasWrapper();
+  requestAnimationFrame(resizeCanvasWrapper);
+  window.addEventListener('resize', resizeCanvasWrapper);
+
+  function paintWhiteBackground(){
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  }
+  paintWhiteBackground();
+
+  function getCanvasPos(e){
+    var rect = canvasWrapper.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    var scaleX = CANVAS_W / rect.width;
+    var scaleY = CANVAS_H / rect.height;
+    var x = (e.clientX - rect.left) * scaleX;
+    var y = (e.clientY - rect.top) * scaleY;
+    x = Math.max(0, Math.min(CANVAS_W, x));
+    y = Math.max(0, Math.min(CANVAS_H, y));
+    return { x: x, y: y };
+  }
+
+  function drawSegment(p1, p2, color, size){
+    ctx.strokeStyle = color;
+    ctx.lineWidth = size;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
+
+  var drawing = false;
+  var currentStroke = null;
+  var lastPoint = null;
+  var pendingPoints = [];
+  var flushTimer = null;
+
+  function scheduleFlush(){
+    if (flushTimer) return;
+    flushTimer = setTimeout(function(){
+      flushTimer = null;
+      flushPending();
+    }, 60);
+  }
+
+  function flushPending(){
+    if (!currentStroke || !pendingPoints.length) return;
+    var pts = pendingPoints;
+    pendingPoints = [];
+    if (firebaseReady){
+      db.ref('strokes/' + currentStroke.id + '/pts').push(pts);
+    }
+  }
+
+  function onPointerDown(e){
+    if (e.target.closest && e.target.closest('.object-item')) return;
+    if (!myName) return;
+    var pos = getCanvasPos(e);
+    if (!pos) return;
+    drawing = true;
+    var sid = 'l' + Date.now() + Math.random().toString(36).slice(2,6);
+    currentStroke = { id: sid, color: currentTool === 'eraser' ? '#ffffff' : currentColor, size: currentSize };
+    myStrokeIds.push(sid);
+    lastPoint = pos;
+    drawSegment(pos, pos, currentStroke.color, currentStroke.size);
+    pendingPoints = [[pos.x, pos.y]];
+    if (firebaseReady){
+      db.ref('strokes/' + sid).set({ color: currentStroke.color, size: currentStroke.size, ts: Date.now(), by: myName });
+    }
+    try { canvasWrapper.setPointerCapture(e.pointerId); } catch(err){}
+  }
+
+  function onPointerMove(e){
+    var pos = getCanvasPos(e);
+    if (!pos) return;
+    sendCursor(pos);
+    if (!drawing || !currentStroke) return;
+    drawSegment(lastPoint, pos, currentStroke.color, currentStroke.size);
+    lastPoint = pos;
+    pendingPoints.push([pos.x, pos.y]);
+    scheduleFlush();
+  }
+
+  function onPointerUp(){
+    if (drawing){
+      flushPending();
+      drawing = false;
+      currentStroke = null;
+    }
+  }
+
+  canvasWrapper.addEventListener('pointerdown', onPointerDown);
+  canvasWrapper.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  var strokePtsListeners = {};
+
+  function attachStrokePointsListener(sid, meta){
+    if (strokePtsListeners[sid]) return;
+    strokePtsListeners[sid] = true;
+    var prevPoint = null;
+    db.ref('strokes/' + sid + '/pts').on('child_added', function(psnap){
+      var batch = psnap.val();
+      if (!batch || !batch.length) return;
+      for (var i=0;i<batch.length;i++){
+        var p = { x: batch[i][0], y: batch[i][1] };
+        if (prevPoint) drawSegment(prevPoint, p, meta.color, meta.size);
+        else drawSegment(p, p, meta.color, meta.size);
+        prevPoint = p;
+      }
+    });
+  }
+
+  function fullRedraw(){
+    paintWhiteBackground();
+    if (!firebaseReady) return;
+    db.ref('strokes').once('value').then(function(snap){
+      snap.forEach(function(strokeSnap){
+        var meta = strokeSnap.val();
+        var prevPoint = null;
+        strokeSnap.child('pts').forEach(function(batchSnap){
+          var batch = batchSnap.val();
+          for (var i=0;i<batch.length;i++){
+            var p = { x: batch[i][0], y: batch[i][1] };
+            if (prevPoint) drawSegment(prevPoint, p, meta.color, meta.size);
+            else drawSegment(p, p, meta.color, meta.size);
+            prevPoint = p;
+          }
+        });
+      });
+    });
+  }
+
+  function attachStrokesListener(){
+    if (!firebaseReady) return;
+    db.ref('strokes').on('child_added', function(snap){
+      attachStrokePointsListener(snap.key, snap.val());
+    });
+    db.ref('strokes').on('child_removed', function(){
+      fullRedraw();
+    });
+  }
+
+  function undoLastStroke(){
+    if (!myStrokeIds.length || !firebaseReady) return;
+    var sid = myStrokeIds.pop();
+    db.ref('strokes/' + sid).remove();
+  }
+
+  var lastCursorSent = 0;
+  function sendCursor(pos){
+    if (!firebaseReady || !myName) return;
+    var now = Date.now();
+    if (now - lastCursorSent < 55) return;
+    lastCursorSent = now;
+    db.ref('cursors/' + myClientId).set({
+      x: (pos.x / CANVAS_W) * 100,
+      y: (pos.y / CANVAS_H) * 100,
+      name: myName,
+      color: myColor,
+      ts: now
+    });
+  }
+
+  var cursorEls = {};
+  function attachCursorsListener(){
+    if (!firebaseReady) return;
+    db.ref('cursors').on('value', function(snap){
+      var seen = {};
+      snap.forEach(function(c){
+        var id = c.key;
+        if (id === myClientId) return;
+        seen[id] = true;
+        var data = c.val();
+        var el = cursorEls[id];
+        if (!el){
+          el = document.createElement('div');
+          el.className = 'cursor-dot';
+          var tip = document.createElement('span');
+          tip.className = 'cursor-tip';
+          var label = document.createElement('span');
+          label.className = 'cursor-label';
+          el.appendChild(tip);
+          el.appendChild(label);
+          cursorsLayer.appendChild(el);
+          cursorEls[id] = el;
+        }
+        el.style.left = data.x + '%';
+        el.style.top = data.y + '%';
+        var tipEl = el.querySelector('.cursor-tip');
+        var labelEl = el.querySelector('.cursor-label');
+        tipEl.style.background = data.color || '#6c4cff';
+        labelEl.style.background = data.color || '#6c4cff';
+        labelEl.textContent = data.name || '...';
+      });
+      Object.keys(cursorEls).forEach(function(id){
+        if (!seen[id]){
+          cursorEls[id].remove();
+          delete cursorEls[id];
+        }
+      });
+      updateOnlineCount(Object.keys(seen).length + 1);
+    });
+  }
+
+  function updateOnlineCount(n){
+    $('online-count').textContent = '● ' + n + ' online';
+  }
+
+  var objectEls = {};
+  function makeObjectDraggable(id, el){
+    var dragging = false;
+    var offXPct = 0, offYPct = 0;
+    el.addEventListener('pointerdown', function(e){
+      if (e.target.classList && e.target.classList.contains('obj-del')) return;
+      dragging = true;
+      try { el.setPointerCapture(e.pointerId); } catch(err){}
+      var wrapRect = canvasWrapper.getBoundingClientRect();
+      var elRect = el.getBoundingClientRect();
+      offXPct = ((e.clientX - elRect.left) / wrapRect.width) * 100;
+      offYPct = ((e.clientY - elRect.top) / wrapRect.height) * 100;
+      el.style.zIndex = 10;
+      e.stopPropagation();
+    });
+    el.addEventListener('pointermove', function(e){
+      if (!dragging) return;
+      var wrapRect = canvasWrapper.getBoundingClientRect();
+      var xPct = ((e.clientX - wrapRect.left) / wrapRect.width) * 100 - offXPct;
+      var yPct = ((e.clientY - wrapRect.top) / wrapRect.height) * 100 - offYPct;
+      xPct = Math.max(0, Math.min(94, xPct));
+      yPct = Math.max(0, Math.min(94, yPct));
+      el.style.left = xPct + '%';
+      el.style.top = yPct + '%';
+      e.stopPropagation();
+    });
+    el.addEventListener('pointerup', function(e){
+      if (!dragging) return;
+      dragging = false;
+      el.style.zIndex = '';
+      var xPct = parseFloat(el.style.left);
+      var yPct = parseFloat(el.style.top);
+      if (firebaseReady) db.ref('objects/' + id).update({ xPct: xPct, yPct: yPct });
+      e.stopPropagation();
+    });
+  }
+
+  function renderObject(id, data){
+    var entry = objectEls[id];
+    var el;
+    if (!entry){
+      el = document.createElement('div');
+      el.className = 'object-item';
+      objectsLayer.appendChild(el);
+      entry = { el: el };
+      objectEls[id] = entry;
+      makeObjectDraggable(id, el);
+    } else {
+      el = entry.el;
+    }
+    el.style.left = data.xPct + '%';
+    el.style.top = data.yPct + '%';
+    el.style.width = (data.wPct || 12) + '%';
+    el.innerHTML = '';
+
+    var content;
+    if (data.type === 'shape'){
+      content = document.createElement('div');
+      content.innerHTML = SHAPE_SVGS[data.kind] || SHAPE_SVGS.circle;
+      content.style.color = data.color || '#6c4cff';
+      content.style.width = '100%';
+      content.style.height = '100%';
+    } else if (data.type === 'video'){
+      content = document.createElement('video');
+      content.src = data.url;
+      content.controls = true;
+      content.muted = true;
+      content.loop = true;
+      content.playsInline = true;
+    } else {
+      content = document.createElement('img');
+      content.src = data.url;
+      content.alt = '';
+      content.draggable = false;
+    }
+    el.appendChild(content);
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'obj-del';
+    delBtn.title = 'Remover';
+    delBtn.textContent = '\u00d7';
+    delBtn.addEventListener('click', function(e){
+      e.stopPropagation();
+      if (firebaseReady) db.ref('objects/' + id).remove();
+    });
+    el.appendChild(delBtn);
+  }
+
+  function attachObjectsListener(){
+    if (!firebaseReady) return;
+    db.ref('objects').on('value', function(snap){
+      var seen = {};
+      snap.forEach(function(o){
+        seen[o.key] = true;
+        renderObject(o.key, o.val());
+      });
+      Object.keys(objectEls).forEach(function(id){
+        if (!seen[id]){
+          objectEls[id].el.remove();
+          delete objectEls[id];
+        }
+      });
+    });
+  }
+
+  function placeObject(data){
+    if (!firebaseReady){
+      appendChatMessage({ name:'Sistema', text:'Configure o Firebase para colocar formas, imagens e vídeos na tela compartilhada.', ts:Date.now() }, true);
+      return;
+    }
+    var id = 'o' + Date.now() + Math.random().toString(36).slice(2,6);
+    var payload = { xPct:44, yPct:42, wPct:12, ts:Date.now(), by: myName };
+    for (var k in data){ payload[k] = data[k]; }
+    db.ref('objects/' + id).set(payload);
+  }
+
+  function buildShapesPanel(){
+    var grid = $('shapes-grid');
+    SHAPE_KEYS.forEach(function(kind){
+      var btn = document.createElement('button');
+      btn.className = 'shape-btn';
+      btn.innerHTML = SHAPE_SVGS[kind];
+      btn.title = kind;
+      btn.addEventListener('click', function(){
+        placeObject({ type:'shape', kind:kind, color: currentColor });
+      });
+      grid.appendChild(btn);
+    });
+  }
+  buildShapesPanel();
+
+  var pendingMedia = [];
+  function renderMediaTray(){
+    var tray = $('media-tray');
+    tray.innerHTML = '';
+    pendingMedia.forEach(function(item){
+      var card = document.createElement('div');
+      card.className = 'media-card';
+      card.draggable = true;
+
+      var preview;
+      if (item.type === 'video'){
+        preview = document.createElement('video');
+        preview.src = item.url;
+        preview.muted = true;
+      } else {
+        preview = document.createElement('img');
+        preview.src = item.url;
+        preview.alt = '';
+      }
+      card.appendChild(preview);
+
+      var label = document.createElement('span');
+      label.textContent = (item.type === 'video' ? 'Vídeo' : 'Imagem') + ' — clique ou arraste';
+      card.appendChild(label);
+
+      card.addEventListener('click', function(){
+        placeObject({ type:item.type, url:item.url, wPct: item.type === 'video' ? 20 : 14 });
+      });
+      card.addEventListener('dragstart', function(e){
+        e.dataTransfer.setData('text/plain', JSON.stringify(item));
+      });
+
+      tray.appendChild(card);
+    });
+  }
+
+  $('btn-add-media').addEventListener('click', function(){
+    var url = $('media-url').value.trim();
+    if (!url) return;
+    var isVideo = /\.(mp4|webm|ogg|mov)(\?|$)/i.test(url);
+    pendingMedia.push({ url:url, type:isVideo ? 'video' : 'image' });
+    $('media-url').value = '';
+    renderMediaTray();
+  });
+
+  canvasWrapper.addEventListener('dragover', function(e){ e.preventDefault(); });
+  canvasWrapper.addEventListener('drop', function(e){
+    e.preventDefault();
+    var raw = e.dataTransfer.getData('text/plain');
+    if (!raw) return;
+    var item;
+    try { item = JSON.parse(raw); } catch(err){ return; }
+    var rect = canvasWrapper.getBoundingClientRect();
+    var xPct = ((e.clientX - rect.left) / rect.width) * 100;
+    var yPct = ((e.clientY - rect.top) / rect.height) * 100;
+    placeObject({ type:item.type, url:item.url, xPct:xPct, yPct:yPct, wPct: item.type === 'video' ? 20 : 14 });
+  });
+
+  function appendChatMessage(msg, isSystem){
+    var row = document.createElement('div');
+    row.className = 'chat-msg' + (isSystem ? ' system' : '');
+    var nameEl = document.createElement('span');
+    nameEl.className = 'chat-name';
+    nameEl.textContent = msg.name;
+    var textEl = document.createElement('span');
+    textEl.className = 'chat-text';
+    textEl.textContent = msg.text;
+    row.appendChild(nameEl);
+    row.appendChild(textEl);
+    chatMessagesEl.appendChild(row);
+    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  }
+
+  function attachChatListener(){
+    if (!firebaseReady) return;
+    db.ref('chat').limitToLast(100).on('child_added', function(snap){
+      appendChatMessage(snap.val());
+    });
+  }
+
+  $('chat-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var text = $('chat-input').value.trim();
+    if (!text || !myName) return;
+    if (!firebaseReady){
+      appendChatMessage({ name:'Sistema', text:'Configure o Firebase para habilitar o chat.', ts:Date.now() }, true);
+      $('chat-input').value = '';
+      return;
+    }
+    db.ref('chat').push({ name: myName, text: text.slice(0,300), ts: Date.now() });
+    $('chat-input').value = '';
+  });
+
+  function buildColorSwatches(){
+    var wrap = $('color-swatches');
+    COLORS.forEach(function(c){
+      var b = document.createElement('button');
+      b.className = 'swatch' + (c === '#ffffff' ? ' swatch-white' : '');
+      b.style.background = c;
+      b.addEventListener('click', function(){
+        currentColor = c;
+        $('color-picker').value = c;
+      });
+      wrap.appendChild(b);
+    });
+  }
+  buildColorSwatches();
+
+  $('color-picker').addEventListener('input', function(){ currentColor = this.value; });
+
+  Array.prototype.forEach.call(document.querySelectorAll('.tool-btn'), function(b){
+    b.addEventListener('click', function(){
+      Array.prototype.forEach.call(document.querySelectorAll('.tool-btn'), function(x){ x.classList.remove('active'); });
+      b.classList.add('active');
+      currentTool = b.dataset.tool;
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.size-btn'), function(b){
+    b.addEventListener('click', function(){
+      Array.prototype.forEach.call(document.querySelectorAll('.size-btn'), function(x){ x.classList.remove('active'); });
+      b.classList.add('active');
+      currentSize = parseInt(b.dataset.size, 10);
+    });
+  });
+  $('btn-undo').addEventListener('click', undoLastStroke);
+
+  $('toggle-chat').addEventListener('click', function(){
+    document.body.classList.toggle('show-chat');
+    document.body.classList.remove('show-tools');
+  });
+  $('toggle-tools').addEventListener('click', function(){
+    document.body.classList.toggle('show-tools');
+    document.body.classList.remove('show-chat');
+  });
+
+  function showOfflineNotice(){
+    $('online-count').textContent = 'modo local (sem sincronizar)';
+    appendChatMessage({ name:'Sistema', text:'Firebase não configurado — você está desenhando só localmente. Veja FIREBASE_CONFIG no código para compartilhar com outras pessoas.', ts:Date.now() }, true);
+  }
+
+  function afterNameSet(){
+    if (firebaseReady){
+      db.ref('cursors/' + myClientId).onDisconnect().remove();
+      attachStrokesListener();
+      attachCursorsListener();
+      attachObjectsListener();
+      attachChatListener();
+    } else {
+      showOfflineNotice();
+    }
+  }
+
+  var hasJoined = false;
+
+  function initNickname(){
+    var modal = $('nickname-modal');
+    var input = $('nickname-input');
+    var btn = $('btn-confirm-name');
+    function confirmName(){
+      var v = input.value.trim();
+      if (!v){ input.focus(); return; }
+      myName = v.slice(0,16);
+      $('my-name').textContent = myName;
+      modal.classList.remove('show');
+      if (!hasJoined){
+        hasJoined = true;
+        afterNameSet();
+      }
+    }
+    btn.addEventListener('click', confirmName);
+    input.addEventListener('keydown', function(e){ if (e.key === 'Enter') confirmName(); });
+    modal.classList.add('show');
+    input.focus();
+  }
+
+  $('btn-nickname').addEventListener('click', function(){
+    $('btn-confirm-name').textContent = hasJoined ? 'Salvar nome' : 'Entrar na tela';
+    $('nickname-input').value = myName;
+    $('nickname-modal').classList.add('show');
+    $('nickname-input').focus();
+  });
+
+  initNickname();
+})();
+</script>
+</body>
+</html>
