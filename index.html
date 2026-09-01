@@ -255,7 +255,7 @@
           <button class="tool-btn active" data-tool="pen" title="Caneta">✏️</button>
           <button class="tool-btn" data-tool="marker" title="Marcador">🖊️</button>
           <button class="tool-btn" data-tool="eraser" title="Borracha">🧽</button>
-          <button class="tool-btn" data-tool="bucket" title="Balde de tinta">🪣</button>
+          <button class="tool-btn" data-tool="smartfill" title="Pincel mágico (preenche a área sem vazar)">🪄</button>
         </div>
         <div class="tool-group" id="size-tools">
           <button class="size-btn" data-size="8">S</button>
@@ -520,19 +520,112 @@
     targetCtx.putImageData(imgData, 0, 0);
   }
 
-  function performFill(pos){
-    if (!myName) return;
-    var fillColor = currentColor;
-    floodFill(ctx, pos.x, pos.y, fillColor, FILL_TOLERANCE);
-    var fid = 'f' + Date.now() + Math.random().toString(36).slice(2,6);
-    myStrokeIds.push(fid);
-    if (firebaseReady){
-      db.ref('strokes/' + fid).set({
-        type:'fill', x: Math.round(pos.x), y: Math.round(pos.y),
-        color: fillColor, ts: Date.now(), by: myName
-      });
+  function computeFillMask(startX, startY, tolerance){
+    startX = Math.round(startX);
+    startY = Math.round(startY);
+    if (startX < 0 || startX >= CANVAS_W || startY < 0 || startY >= CANVAS_H) return null;
+
+    var imgData = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
+    var data = imgData.data;
+    var startIdx = (startY * CANVAS_W + startX) * 4;
+    var startR = data[startIdx], startG = data[startIdx+1], startB = data[startIdx+2], startA = data[startIdx+3];
+
+    function matches(idx){
+      return Math.abs(data[idx] - startR) <= tolerance &&
+             Math.abs(data[idx+1] - startG) <= tolerance &&
+             Math.abs(data[idx+2] - startB) <= tolerance &&
+             Math.abs(data[idx+3] - startA) <= tolerance;
+    }
+
+    var mask = new Uint8Array(CANVAS_W * CANVAS_H);
+    mask[startY * CANVAS_W + startX] = 1;
+    var stack = [[startX, startY]];
+
+    while (stack.length){
+      var pt = stack.pop();
+      var x = pt[0], y = pt[1];
+
+      var xLeft = x;
+      while (xLeft > 0 && matches((y * CANVAS_W + (xLeft - 1)) * 4)) xLeft--;
+      var xRight = x;
+      while (xRight < CANVAS_W - 1 && matches((y * CANVAS_W + (xRight + 1)) * 4)) xRight++;
+
+      for (var xi = xLeft; xi <= xRight; xi++){
+        mask[y * CANVAS_W + xi] = 1;
+        if (y > 0){
+          var upMaskIdx = (y - 1) * CANVAS_W + xi;
+          if (!mask[upMaskIdx] && matches(((y - 1) * CANVAS_W + xi) * 4)){
+            mask[upMaskIdx] = 1;
+            stack.push([xi, y - 1]);
+          }
+        }
+        if (y < CANVAS_H - 1){
+          var downMaskIdx = (y + 1) * CANVAS_W + xi;
+          if (!mask[downMaskIdx] && matches(((y + 1) * CANVAS_W + xi) * 4)){
+            mask[downMaskIdx] = 1;
+            stack.push([xi, y + 1]);
+          }
+        }
+      }
+    }
+
+    return mask;
+  }
+
+  function paintMaskedDab(cx, cy, radius, colorRGB, mask){
+    cx = Math.round(cx); cy = Math.round(cy);
+    var r = Math.max(1, Math.ceil(radius));
+    var x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r);
+    var x1 = Math.min(CANVAS_W - 1, cx + r), y1 = Math.min(CANVAS_H - 1, cy + r);
+    var w = x1 - x0 + 1, h = y1 - y0 + 1;
+    if (w <= 0 || h <= 0) return;
+
+    var imgData = ctx.getImageData(x0, y0, w, h);
+    var data = imgData.data;
+    var rSq = r * r;
+    var changed = false;
+
+    for (var y = 0; y < h; y++){
+      for (var x = 0; x < w; x++){
+        var gx = x0 + x, gy = y0 + y;
+        var dx = gx - cx, dy = gy - cy;
+        if (dx*dx + dy*dy > rSq) continue;
+        if (mask[gy * CANVAS_W + gx] !== 1) continue;
+        var i = (y * w + x) * 4;
+        data[i] = colorRGB.r; data[i+1] = colorRGB.g; data[i+2] = colorRGB.b; data[i+3] = 255;
+        changed = true;
+      }
+    }
+
+    if (changed) ctx.putImageData(imgData, x0, y0);
+  }
+
+  function paintMaskedLine(p1, p2, radius, colorRGB, mask){
+    var dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    var steps = Math.max(1, Math.ceil(dist / Math.max(2, radius * 0.5)));
+    for (var i=0;i<=steps;i++){
+      var t = i / steps;
+      paintMaskedDab(p1.x + (p2.x-p1.x)*t, p1.y + (p2.y-p1.y)*t, radius, colorRGB, mask);
     }
   }
+
+  function applyMaskColor(mask, colorRGB){
+    var imgData = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
+    var data = imgData.data;
+    for (var idx = 0; idx < mask.length; idx++){
+      if (mask[idx] === 1){
+        var i = idx * 4;
+        data[i] = colorRGB.r; data[i+1] = colorRGB.g; data[i+2] = colorRGB.b; data[i+3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  var smartFillMask = null;
+  var smartFillColorRGB = null;
+  var smartFillSeed = null;
+  var smartFillLastPoint = null;
+  var drawingSmartFill = false;
 
   var drawing = false;
   var currentStroke = null;
@@ -573,12 +666,21 @@
     if (!myName) return;
     var pos = getCanvasPos(e);
     if (!pos) return;
-    if (currentTool === 'bucket'){
-      performFill(pos);
+
+    if (currentTool === 'smartfill'){
+      smartFillMask = computeFillMask(pos.x, pos.y, FILL_TOLERANCE);
+      if (!smartFillMask) return;
+      smartFillColorRGB = hexToRgb(currentColor);
+      smartFillSeed = pos;
+      smartFillLastPoint = pos;
+      drawingSmartFill = true;
+      paintMaskedDab(pos.x, pos.y, currentSize, smartFillColorRGB, smartFillMask);
+      try { canvasViewport.setPointerCapture(e.pointerId); } catch(err){}
       return;
     }
+
     drawing = true;
-    var sid = 'l' + Date.now() + Math.random().toString(36).slice(2,6);
+    var sid = firebaseReady ? db.ref('strokes').push().key : ('l' + Date.now() + Math.random().toString(36).slice(2,6));
     currentStroke = { id: sid, color: currentTool === 'eraser' ? '#ffffff' : currentColor, size: currentSize };
     myStrokeIds.push(sid);
     lastPoint = pos;
@@ -601,6 +703,15 @@
     var pos = getCanvasPos(e);
     if (!pos) return;
     sendCursor(pos);
+
+    if (drawingSmartFill){
+      if (smartFillMask){
+        paintMaskedLine(smartFillLastPoint, pos, currentSize, smartFillColorRGB, smartFillMask);
+        smartFillLastPoint = pos;
+      }
+      return;
+    }
+
     if (!drawing || !currentStroke) return;
     drawSegment(lastPoint, pos, currentStroke.color, currentStroke.size);
     lastPoint = pos;
@@ -612,6 +723,22 @@
     if (panning){
       panning = false;
       canvasViewport.classList.remove('panning');
+    }
+    if (drawingSmartFill){
+      if (smartFillMask){
+        applyMaskColor(smartFillMask, smartFillColorRGB);
+        var fid = firebaseReady ? db.ref('strokes').push().key : ('f' + Date.now() + Math.random().toString(36).slice(2,6));
+        myStrokeIds.push(fid);
+        if (firebaseReady){
+          db.ref('strokes/' + fid).set({
+            type:'fill', x: Math.round(smartFillSeed.x), y: Math.round(smartFillSeed.y),
+            color: currentColor, ts: Date.now(), by: myName
+          });
+        }
+      }
+      drawingSmartFill = false;
+      smartFillMask = null;
+      return;
     }
     if (drawing){
       flushPending();
