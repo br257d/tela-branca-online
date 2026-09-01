@@ -51,9 +51,9 @@
   #layout{ flex:1; display:flex; min-height:0; }
 
   .side-panel{
-    width:270px; flex:0 0 auto; background:var(--panel);
+    width:230px; flex:0 0 auto; background:var(--panel);
     display:flex; flex-direction:column; min-height:0;
-    padding:14px; gap:10px;
+    padding:12px; gap:10px;
   }
   #chat-panel{ border-right:1px solid var(--line); }
   #shapes-panel{ border-left:1px solid var(--line); overflow-y:auto; }
@@ -100,14 +100,21 @@
   .media-card img, .media-card video{ width:38px; height:38px; object-fit:cover; border-radius:6px; background:#000; }
   .media-card span{ font-size:12px; color:var(--muted); }
 
-  #canvas-area{ flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; padding:16px; gap:12px; }
+  #canvas-area{ flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; padding:10px; gap:10px; }
   .canvas-scaler{ flex:1; min-height:0; min-width:0; display:flex; align-items:center; justify-content:center; }
-  #canvas-wrapper{
+  #canvas-viewport{
     position:relative; background:#fff;
     border-radius:var(--radius); box-shadow:var(--shadow);
     overflow:hidden; touch-action:none;
   }
-  #draw-canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+  #canvas-wrapper{
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    transform-origin:0 0;
+  }
+  #draw-canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+  #canvas-viewport{ cursor:crosshair; }
+  #canvas-viewport.pan-mode{ cursor:grab; }
+  #canvas-viewport.pan-mode.panning{ cursor:grabbing; }
   #objects-layer{ position:absolute; inset:0; pointer-events:none; }
   #cursors-layer{ position:absolute; inset:0; pointer-events:none; z-index:5; }
 
@@ -123,7 +130,13 @@
     border-radius:50%; background:var(--ink); color:#fff; border:2px solid #fff;
     font-size:12px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center;
   }
-  .object-item:hover .obj-del{ display:flex; }
+  .obj-resize{
+    position:absolute; bottom:-7px; right:-7px; width:16px; height:16px;
+    border-radius:5px; background:var(--accent); border:2px solid #fff;
+    cursor:nwse-resize; display:none; touch-action:none;
+    box-shadow:0 1px 3px rgba(0,0,0,.3);
+  }
+  .object-item:hover .obj-del, .object-item:hover .obj-resize{ display:flex; }
 
   .cursor-dot{ position:absolute; pointer-events:none; transform:translate(-2px,-2px); transition:left .05s linear, top .05s linear; }
   .cursor-tip{
@@ -153,6 +166,14 @@
   }
   .size-btn{ font-size:12px; font-weight:700; width:32px; }
   .tool-btn.active, .size-btn.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  #zoom-tools{ background:var(--bg); border-radius:9px; padding:4px 6px; }
+  #zoom-tools button{
+    background:none; border:none; width:26px; height:26px; border-radius:6px;
+    cursor:pointer; font-size:15px; color:var(--ink);
+  }
+  #zoom-tools button:hover{ background:#fff; }
+  #zoom-tools button.active{ background:var(--accent); color:#fff; }
+  #zoom-label{ font-size:12px; color:var(--muted); width:38px; text-align:center; display:inline-block; }
   #btn-undo{
     margin-left:auto; background:none; border:1px solid var(--line); border-radius:9px;
     padding:8px 12px; cursor:pointer; font-size:13px; color:var(--ink);
@@ -219,10 +240,12 @@
 
     <main id="canvas-area">
       <div class="canvas-scaler">
-        <div id="canvas-wrapper">
-          <canvas id="draw-canvas" width="1200" height="750"></canvas>
-          <div id="objects-layer"></div>
-          <div id="cursors-layer"></div>
+        <div id="canvas-viewport">
+          <div id="canvas-wrapper">
+            <canvas id="draw-canvas" width="2400" height="1500"></canvas>
+            <div id="objects-layer"></div>
+            <div id="cursors-layer"></div>
+          </div>
         </div>
       </div>
       <div id="toolbar">
@@ -234,9 +257,16 @@
           <button class="tool-btn" data-tool="eraser" title="Borracha">🧽</button>
         </div>
         <div class="tool-group" id="size-tools">
-          <button class="size-btn" data-size="4">S</button>
-          <button class="size-btn active" data-size="10">M</button>
-          <button class="size-btn" data-size="24">L</button>
+          <button class="size-btn" data-size="8">S</button>
+          <button class="size-btn active" data-size="20">M</button>
+          <button class="size-btn" data-size="48">L</button>
+        </div>
+        <div class="tool-group" id="zoom-tools">
+          <button id="btn-zoom-out" title="Diminuir zoom">−</button>
+          <span id="zoom-label">100%</span>
+          <button id="btn-zoom-in" title="Aumentar zoom">+</button>
+          <button id="btn-pan-toggle" title="Mover a visão (arrastar)">🖐</button>
+          <button id="btn-zoom-reset" title="Restaurar zoom">⤢</button>
         </div>
         <button id="btn-undo">↩ Desfazer</button>
       </div>
@@ -290,14 +320,14 @@
 
   function $(id){ return document.getElementById(id); }
 
-  var CANVAS_W = 1200, CANVAS_H = 750;
+  var CANVAS_W = 2400, CANVAS_H = 1500;
   var myClientId = 'u' + Date.now() + Math.random().toString(36).slice(2,8);
   var myName = '';
   var CURSOR_COLORS = ['#6c4cff','#ff6f59','#12b5c9','#ff3b81','#39c95c','#f0a500'];
   var myColor = CURSOR_COLORS[Math.floor(Math.random()*CURSOR_COLORS.length)];
   var currentColor = '#241f3d';
   var currentTool = 'pen';
-  var currentSize = 10;
+  var currentSize = 20;
   var myStrokeIds = [];
 
   var SHAPE_SVGS = {
@@ -316,13 +346,14 @@
   var ctx = canvas.getContext('2d');
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+  var canvasViewport = $('canvas-viewport');
   var canvasWrapper = $('canvas-wrapper');
   var canvasScaler = document.querySelector('.canvas-scaler');
   var objectsLayer = $('objects-layer');
   var cursorsLayer = $('cursors-layer');
   var chatMessagesEl = $('chat-messages');
 
-  function resizeCanvasWrapper(){
+  function resizeCanvasViewport(){
     var availW = canvasScaler.clientWidth;
     var availH = canvasScaler.clientHeight;
     if (!availW || !availH) return;
@@ -333,12 +364,70 @@
       h = availH;
       w = h * ratio;
     }
-    canvasWrapper.style.width = w + 'px';
-    canvasWrapper.style.height = h + 'px';
+    canvasViewport.style.width = w + 'px';
+    canvasViewport.style.height = h + 'px';
+    clampPan();
+    applyTransform();
   }
-  resizeCanvasWrapper();
-  requestAnimationFrame(resizeCanvasWrapper);
-  window.addEventListener('resize', resizeCanvasWrapper);
+
+  var zoom = 1;
+  var panX = 0, panY = 0;
+  var MIN_ZOOM = 1, MAX_ZOOM = 8;
+
+  function applyTransform(){
+    canvasWrapper.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+  }
+
+  function clampPan(){
+    var vw = canvasViewport.clientWidth;
+    var vh = canvasViewport.clientHeight;
+    var contentW = vw * zoom;
+    var contentH = vh * zoom;
+    var minX = Math.min(0, vw - contentW);
+    var minY = Math.min(0, vh - contentH);
+    panX = Math.max(minX, Math.min(0, panX));
+    panY = Math.max(minY, Math.min(0, panY));
+  }
+
+  function setZoom(newZoom, anchorClientX, anchorClientY){
+    newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+    var rect = canvasViewport.getBoundingClientRect();
+    var ax = (anchorClientX != null) ? (anchorClientX - rect.left) : rect.width / 2;
+    var ay = (anchorClientY != null) ? (anchorClientY - rect.top) : rect.height / 2;
+    var contentX = (ax - panX) / zoom;
+    var contentY = (ay - panY) / zoom;
+    zoom = newZoom;
+    panX = ax - contentX * zoom;
+    panY = ay - contentY * zoom;
+    clampPan();
+    applyTransform();
+    $('zoom-label').textContent = Math.round(zoom * 100) + '%';
+  }
+
+  resizeCanvasViewport();
+  requestAnimationFrame(resizeCanvasViewport);
+  window.addEventListener('resize', resizeCanvasViewport);
+
+  $('btn-zoom-in').addEventListener('click', function(){ setZoom(zoom + 0.5); });
+  $('btn-zoom-out').addEventListener('click', function(){ setZoom(zoom - 0.5); });
+  $('btn-zoom-reset').addEventListener('click', function(){
+    zoom = 1; panX = 0; panY = 0;
+    applyTransform();
+    $('zoom-label').textContent = '100%';
+  });
+
+  var panMode = false;
+  $('btn-pan-toggle').addEventListener('click', function(){
+    panMode = !panMode;
+    $('btn-pan-toggle').classList.toggle('active', panMode);
+    canvasViewport.classList.toggle('pan-mode', panMode);
+  });
+
+  canvasViewport.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var factor = e.deltaY < 0 ? 1.15 : 1/1.15;
+    setZoom(zoom * factor, e.clientX, e.clientY);
+  }, { passive:false });
 
   function paintWhiteBackground(){
     ctx.fillStyle = '#ffffff';
@@ -347,7 +436,7 @@
   paintWhiteBackground();
 
   function getCanvasPos(e){
-    var rect = canvasWrapper.getBoundingClientRect();
+    var rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     var scaleX = CANVAS_W / rect.width;
     var scaleY = CANVAS_H / rect.height;
@@ -390,7 +479,18 @@
     }
   }
 
+  var panning = false;
+  var panStartX = 0, panStartY = 0, panOrigX = 0, panOrigY = 0;
+
   function onPointerDown(e){
+    if (panMode){
+      panning = true;
+      panStartX = e.clientX; panStartY = e.clientY;
+      panOrigX = panX; panOrigY = panY;
+      try { canvasViewport.setPointerCapture(e.pointerId); } catch(err){}
+      canvasViewport.classList.add('panning');
+      return;
+    }
     if (e.target.closest && e.target.closest('.object-item')) return;
     if (!myName) return;
     var pos = getCanvasPos(e);
@@ -405,10 +505,17 @@
     if (firebaseReady){
       db.ref('strokes/' + sid).set({ color: currentStroke.color, size: currentStroke.size, ts: Date.now(), by: myName });
     }
-    try { canvasWrapper.setPointerCapture(e.pointerId); } catch(err){}
+    try { canvasViewport.setPointerCapture(e.pointerId); } catch(err){}
   }
 
   function onPointerMove(e){
+    if (panning){
+      panX = panOrigX + (e.clientX - panStartX);
+      panY = panOrigY + (e.clientY - panStartY);
+      clampPan();
+      applyTransform();
+      return;
+    }
     var pos = getCanvasPos(e);
     if (!pos) return;
     sendCursor(pos);
@@ -420,6 +527,10 @@
   }
 
   function onPointerUp(){
+    if (panning){
+      panning = false;
+      canvasViewport.classList.remove('panning');
+    }
     if (drawing){
       flushPending();
       drawing = false;
@@ -427,8 +538,8 @@
     }
   }
 
-  canvasWrapper.addEventListener('pointerdown', onPointerDown);
-  canvasWrapper.addEventListener('pointermove', onPointerMove);
+  canvasViewport.addEventListener('pointerdown', onPointerDown);
+  canvasViewport.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
 
@@ -547,12 +658,15 @@
   }
 
   var objectEls = {};
+  var interactingObjectId = null;
+
   function makeObjectDraggable(id, el){
     var dragging = false;
     var offXPct = 0, offYPct = 0;
     el.addEventListener('pointerdown', function(e){
-      if (e.target.classList && e.target.classList.contains('obj-del')) return;
+      if (e.target.classList && (e.target.classList.contains('obj-del') || e.target.classList.contains('obj-resize'))) return;
       dragging = true;
+      interactingObjectId = id;
       try { el.setPointerCapture(e.pointerId); } catch(err){}
       var wrapRect = canvasWrapper.getBoundingClientRect();
       var elRect = el.getBoundingClientRect();
@@ -575,6 +689,7 @@
     el.addEventListener('pointerup', function(e){
       if (!dragging) return;
       dragging = false;
+      interactingObjectId = null;
       el.style.zIndex = '';
       var xPct = parseFloat(el.style.left);
       var yPct = parseFloat(el.style.top);
@@ -583,23 +698,65 @@
     });
   }
 
+  function makeObjectResizable(id, el, handle){
+    var resizing = false;
+    var startWidthPx = 0, startX = 0;
+    handle.addEventListener('pointerdown', function(e){
+      resizing = true;
+      interactingObjectId = id;
+      try { handle.setPointerCapture(e.pointerId); } catch(err){}
+      startX = e.clientX;
+      startWidthPx = el.getBoundingClientRect().width;
+      e.stopPropagation();
+    });
+    handle.addEventListener('pointermove', function(e){
+      if (!resizing) return;
+      var wrapRect = canvasWrapper.getBoundingClientRect();
+      var newWidthPx = Math.max(20, startWidthPx + (e.clientX - startX));
+      var wPct = Math.max(4, Math.min(80, (newWidthPx / wrapRect.width) * 100));
+      el.style.width = wPct + '%';
+      e.stopPropagation();
+    });
+    handle.addEventListener('pointerup', function(e){
+      if (!resizing) return;
+      resizing = false;
+      interactingObjectId = null;
+      var wPct = parseFloat(el.style.width);
+      if (firebaseReady) db.ref('objects/' + id).update({ wPct: wPct });
+      e.stopPropagation();
+    });
+  }
+
   function renderObject(id, data){
     var entry = objectEls[id];
     var el;
+    var resizeHandle;
     if (!entry){
       el = document.createElement('div');
       el.className = 'object-item';
       objectsLayer.appendChild(el);
-      entry = { el: el };
+      resizeHandle = document.createElement('div');
+      resizeHandle.className = 'obj-resize';
+      resizeHandle.title = 'Redimensionar';
+      entry = { el: el, resizeHandle: resizeHandle };
       objectEls[id] = entry;
       makeObjectDraggable(id, el);
+      makeObjectResizable(id, el, resizeHandle);
     } else {
       el = entry.el;
+      resizeHandle = entry.resizeHandle;
     }
-    el.style.left = data.xPct + '%';
-    el.style.top = data.yPct + '%';
-    el.style.width = (data.wPct || 12) + '%';
-    el.innerHTML = '';
+
+    if (id !== interactingObjectId){
+      el.style.left = data.xPct + '%';
+      el.style.top = data.yPct + '%';
+      el.style.width = (data.wPct || 12) + '%';
+    }
+
+    var oldContent = el.querySelector('.obj-content');
+    if (oldContent) oldContent.remove();
+    var oldDel = el.querySelector('.obj-del');
+    if (oldDel) oldDel.remove();
 
     var content;
     if (data.type === 'shape'){
@@ -621,6 +778,7 @@
       content.alt = '';
       content.draggable = false;
     }
+    content.className = (content.className ? content.className + ' ' : '') + 'obj-content';
     el.appendChild(content);
 
     var delBtn = document.createElement('button');
@@ -632,6 +790,7 @@
       if (firebaseReady) db.ref('objects/' + id).remove();
     });
     el.appendChild(delBtn);
+    el.appendChild(resizeHandle);
   }
 
   function attachObjectsListener(){
@@ -722,8 +881,8 @@
     renderMediaTray();
   });
 
-  canvasWrapper.addEventListener('dragover', function(e){ e.preventDefault(); });
-  canvasWrapper.addEventListener('drop', function(e){
+  canvasViewport.addEventListener('dragover', function(e){ e.preventDefault(); });
+  canvasViewport.addEventListener('drop', function(e){
     e.preventDefault();
     var raw = e.dataTransfer.getData('text/plain');
     if (!raw) return;
