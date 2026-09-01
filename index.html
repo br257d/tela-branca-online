@@ -626,6 +626,8 @@
   window.addEventListener('pointercancel', onPointerUp);
 
   var strokePtsListeners = {};
+  var strokeCache = {};
+  var strokeOrder = [];
 
   function attachStrokePointsListener(sid, meta){
     if (strokePtsListeners[sid]) return;
@@ -634,6 +636,10 @@
     db.ref('strokes/' + sid + '/pts').on('child_added', function(psnap){
       var batch = psnap.val();
       if (!batch || !batch.length) return;
+      var cacheEntry = strokeCache[sid];
+      if (cacheEntry && cacheEntry.points){
+        cacheEntry.points.push.apply(cacheEntry.points, batch);
+      }
       for (var i=0;i<batch.length;i++){
         var p = { x: batch[i][0], y: batch[i][1] };
         if (prevPoint) drawSegment(prevPoint, p, meta.color, meta.size);
@@ -643,49 +649,63 @@
     });
   }
 
-  function fullRedraw(){
+  function redrawFromCache(){
     paintWhiteBackground();
-    if (!firebaseReady) return;
-    db.ref('strokes').once('value').then(function(snap){
-      snap.forEach(function(strokeSnap){
-        var meta = strokeSnap.val();
-        if (meta && meta.type === 'fill'){
-          floodFill(ctx, meta.x, meta.y, meta.color, FILL_TOLERANCE);
-          return;
-        }
-        var prevPoint = null;
-        strokeSnap.child('pts').forEach(function(batchSnap){
-          var batch = batchSnap.val();
-          for (var i=0;i<batch.length;i++){
-            var p = { x: batch[i][0], y: batch[i][1] };
-            if (prevPoint) drawSegment(prevPoint, p, meta.color, meta.size);
-            else drawSegment(p, p, meta.color, meta.size);
-            prevPoint = p;
-          }
-        });
-      });
+    strokeOrder.forEach(function(sid){
+      var entry = strokeCache[sid];
+      if (!entry) return;
+      if (entry.isFill){
+        floodFill(ctx, entry.meta.x, entry.meta.y, entry.meta.color, FILL_TOLERANCE);
+        return;
+      }
+      var pts = entry.points || [];
+      var prevPoint = null;
+      for (var i=0;i<pts.length;i++){
+        var p = { x: pts[i][0], y: pts[i][1] };
+        if (prevPoint) drawSegment(prevPoint, p, entry.meta.color, entry.meta.size);
+        else drawSegment(p, p, entry.meta.color, entry.meta.size);
+        prevPoint = p;
+      }
     });
   }
 
   function attachStrokesListener(){
     if (!firebaseReady) return;
     db.ref('strokes').on('child_added', function(snap){
+      var sid = snap.key;
       var meta = snap.val();
       if (meta && meta.type === 'fill'){
+        strokeCache[sid] = { meta: meta, isFill: true };
+        strokeOrder.push(sid);
         floodFill(ctx, meta.x, meta.y, meta.color, FILL_TOLERANCE);
         return;
       }
-      attachStrokePointsListener(snap.key, meta);
+      strokeCache[sid] = { meta: meta, isFill: false, points: [] };
+      strokeOrder.push(sid);
+      attachStrokePointsListener(sid, meta);
     });
-    db.ref('strokes').on('child_removed', function(){
-      fullRedraw();
+    db.ref('strokes').on('child_removed', function(snap){
+      var sid = snap.key;
+      delete strokeCache[sid];
+      var idx = strokeOrder.indexOf(sid);
+      if (idx !== -1) strokeOrder.splice(idx, 1);
+      redrawFromCache();
     });
   }
 
+  var undoOnCooldown = false;
   function undoLastStroke(){
-    if (!myStrokeIds.length || !firebaseReady) return;
+    if (undoOnCooldown || !myStrokeIds.length || !firebaseReady) return;
+    undoOnCooldown = true;
+    $('btn-undo').disabled = true;
     var sid = myStrokeIds.pop();
-    db.ref('strokes/' + sid).remove();
+    db.ref('strokes/' + sid).remove().then(function(){
+      undoOnCooldown = false;
+      $('btn-undo').disabled = false;
+    }).catch(function(){
+      undoOnCooldown = false;
+      $('btn-undo').disabled = false;
+    });
   }
 
   var lastCursorSent = 0;
