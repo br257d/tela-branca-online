@@ -629,11 +629,15 @@
   var strokeCache = {};
   var strokeOrder = [];
 
-  function attachStrokePointsListener(sid, meta){
+  function attachStrokePointsListener(sid, meta, initialPrevPoint, skipBatchCount){
     if (strokePtsListeners[sid]) return;
     strokePtsListeners[sid] = true;
-    var prevPoint = null;
+    var prevPoint = initialPrevPoint || null;
+    var seenBatches = 0;
+    var toSkip = skipBatchCount || 0;
     db.ref('strokes/' + sid + '/pts').on('child_added', function(psnap){
+      seenBatches++;
+      if (seenBatches <= toSkip) return;
       var batch = psnap.val();
       if (!batch || !batch.length) return;
       var cacheEntry = strokeCache[sid];
@@ -669,27 +673,62 @@
     });
   }
 
+  function registerFillEntry(sid, meta){
+    strokeCache[sid] = { meta: meta, isFill: true };
+    strokeOrder.push(sid);
+    floodFill(ctx, meta.x, meta.y, meta.color, FILL_TOLERANCE);
+  }
+
   function attachStrokesListener(){
     if (!firebaseReady) return;
-    db.ref('strokes').on('child_added', function(snap){
-      var sid = snap.key;
-      var meta = snap.val();
-      if (meta && meta.type === 'fill'){
-        strokeCache[sid] = { meta: meta, isFill: true };
+    db.ref('strokes').once('value').then(function(snap){
+      snap.forEach(function(strokeSnap){
+        var sid = strokeSnap.key;
+        var meta = strokeSnap.val();
+        if (meta && meta.type === 'fill'){
+          registerFillEntry(sid, meta);
+          return;
+        }
+        var pointsArray = [];
+        var batchCount = 0;
+        var prevPoint = null;
+        strokeSnap.child('pts').forEach(function(batchSnap){
+          batchCount++;
+          var batch = batchSnap.val();
+          if (!batch || !batch.length) return;
+          pointsArray.push.apply(pointsArray, batch);
+          for (var i=0;i<batch.length;i++){
+            var p = { x: batch[i][0], y: batch[i][1] };
+            if (prevPoint) drawSegment(prevPoint, p, meta.color, meta.size);
+            else drawSegment(p, p, meta.color, meta.size);
+            prevPoint = p;
+          }
+        });
+        strokeCache[sid] = { meta: meta, isFill: false, points: pointsArray };
         strokeOrder.push(sid);
-        floodFill(ctx, meta.x, meta.y, meta.color, FILL_TOLERANCE);
-        return;
-      }
-      strokeCache[sid] = { meta: meta, isFill: false, points: [] };
-      strokeOrder.push(sid);
-      attachStrokePointsListener(sid, meta);
-    });
-    db.ref('strokes').on('child_removed', function(snap){
-      var sid = snap.key;
-      delete strokeCache[sid];
-      var idx = strokeOrder.indexOf(sid);
-      if (idx !== -1) strokeOrder.splice(idx, 1);
-      redrawFromCache();
+        attachStrokePointsListener(sid, meta, prevPoint, batchCount);
+      });
+
+      db.ref('strokes').on('child_added', function(snap){
+        var sid = snap.key;
+        if (strokeCache[sid]) return;
+        var meta = snap.val();
+        if (meta && meta.type === 'fill'){
+          registerFillEntry(sid, meta);
+          return;
+        }
+        strokeCache[sid] = { meta: meta, isFill: false, points: [] };
+        strokeOrder.push(sid);
+        attachStrokePointsListener(sid, meta, null, 0);
+      });
+
+      db.ref('strokes').on('child_removed', function(snap){
+        var sid = snap.key;
+        delete strokeCache[sid];
+        var idx = strokeOrder.indexOf(sid);
+        if (idx !== -1) strokeOrder.splice(idx, 1);
+        redrawFromCache();
+      });
     });
   }
 
