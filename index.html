@@ -166,6 +166,12 @@
   }
   .size-btn{ font-size:12px; font-weight:700; width:32px; }
   .tool-btn.active, .size-btn.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  #size-input{
+    width:54px; border:1px solid var(--line); border-radius:9px;
+    padding:7px 6px; font-size:13px; font-family:inherit; color:var(--ink);
+    text-align:center; background:var(--bg);
+  }
+  #size-input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
   #zoom-tools{ background:var(--bg); border-radius:9px; padding:4px 6px; }
   #zoom-tools button{
     background:none; border:none; width:26px; height:26px; border-radius:6px;
@@ -262,6 +268,7 @@
           <button class="size-btn" data-size="8">S</button>
           <button class="size-btn active" data-size="20">M</button>
           <button class="size-btn" data-size="48">L</button>
+          <input type="number" id="size-input" min="1" max="300" step="1" value="20" title="Espessura exata (px)">
         </div>
         <div class="tool-group" id="zoom-tools">
           <button id="btn-zoom-out" title="Diminuir zoom">−</button>
@@ -1243,12 +1250,21 @@
       currentTool = b.dataset.tool;
     });
   });
+  var sizeInput = $('size-input');
   Array.prototype.forEach.call(document.querySelectorAll('.size-btn'), function(b){
     b.addEventListener('click', function(){
       Array.prototype.forEach.call(document.querySelectorAll('.size-btn'), function(x){ x.classList.remove('active'); });
       b.classList.add('active');
       currentSize = parseInt(b.dataset.size, 10);
+      sizeInput.value = currentSize;
     });
+  });
+  sizeInput.addEventListener('input', function(){
+    var v = parseInt(sizeInput.value, 10);
+    if (isNaN(v)) return;
+    v = Math.max(1, Math.min(300, v));
+    currentSize = v;
+    Array.prototype.forEach.call(document.querySelectorAll('.size-btn'), function(x){ x.classList.remove('active'); });
   });
   $('btn-undo').addEventListener('click', undoLastStroke);
 
@@ -1309,6 +1325,11 @@
   });
 
   initNickname();
+
+  requestAnimationFrame(function(){
+    resizeCanvasViewport();
+    requestAnimationFrame(resizeCanvasViewport);
+  });
 })();
 </script>
 </body>
