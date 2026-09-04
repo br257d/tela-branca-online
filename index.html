@@ -255,6 +255,7 @@
           <button class="tool-btn active" data-tool="pen" title="Caneta">✏️</button>
           <button class="tool-btn" data-tool="marker" title="Marcador">🖊️</button>
           <button class="tool-btn" data-tool="eraser" title="Borracha">🧽</button>
+          <button class="tool-btn" data-tool="bucket" title="Balde de tinta (preenche a área toda de uma vez)">🪣</button>
           <button class="tool-btn" data-tool="smartfill" title="Pincel mágico (pinta rápido sem vazar pra fora)">🪄</button>
         </div>
         <div class="tool-group" id="size-tools">
@@ -520,6 +521,20 @@
     targetCtx.putImageData(imgData, 0, 0);
   }
 
+  function performFill(pos){
+    if (!myName) return;
+    var fillColor = currentColor;
+    floodFill(ctx, pos.x, pos.y, fillColor, FILL_TOLERANCE);
+    var fid = firebaseReady ? db.ref('strokes').push().key : ('f' + Date.now() + Math.random().toString(36).slice(2,6));
+    myStrokeIds.push(fid);
+    if (firebaseReady){
+      db.ref('strokes/' + fid).set({
+        type:'fill', x: Math.round(pos.x), y: Math.round(pos.y),
+        color: fillColor, ts: Date.now(), by: myName
+      });
+    }
+  }
+
   function computeFillMask(startX, startY, tolerance){
     startX = Math.round(startX);
     startY = Math.round(startY);
@@ -617,6 +632,7 @@
         smartFillLastInsidePoint = pos;
       }
     } else if (smartFillInsideActive){
+      if (flushTimer){ clearTimeout(flushTimer); flushTimer = null; }
       flushPending();
       smartFillInsideActive = false;
       currentStroke = null;
@@ -662,6 +678,11 @@
     if (!myName) return;
     var pos = getCanvasPos(e);
     if (!pos) return;
+
+    if (currentTool === 'bucket'){
+      performFill(pos);
+      return;
+    }
 
     if (currentTool === 'smartfill'){
       smartFillMask = computeFillMask(pos.x, pos.y, FILL_TOLERANCE);
@@ -722,6 +743,7 @@
     }
     if (drawingSmartFill){
       if (smartFillInsideActive){
+        if (flushTimer){ clearTimeout(flushTimer); flushTimer = null; }
         flushPending();
       }
       drawingSmartFill = false;
@@ -731,6 +753,7 @@
       return;
     }
     if (drawing){
+      if (flushTimer){ clearTimeout(flushTimer); flushTimer = null; }
       flushPending();
       drawing = false;
       currentStroke = null;
